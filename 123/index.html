@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Real-time Chat App</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen p-4">
+  <!-- Username Modal -->
+  <div id="usernameModal" class="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
+    <div class="bg-gray-800 p-6 rounded-lg shadow-lg max-w-md w-full">
+      <h2 class="text-xl font-bold mb-4">Welcome to Chat App</h2>
+      <p class="mb-4">Please enter your name to continue:</p>
+      <div class="flex mb-4">
+        <input id="usernameInput" class="flex-1 p-3 rounded-l bg-gray-700 text-white border-gray-600 border focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Your name..." />
+        <button id="saveUsername" class="bg-blue-600 px-4 py-2 rounded-r hover:bg-blue-700 transition-colors">Continue</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Chat Interface -->
+  <div class="w-full max-w-4xl bg-gray-800 rounded-lg shadow-lg overflow-hidden flex flex-col h-[90vh]">
+    <!-- Header -->
+    <div class="bg-gray-700 p-4 flex justify-between items-center border-b border-gray-600">
+      <div class="flex items-center">
+        <div class="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-xl font-bold mr-3" id="userInitial"></div>
+        <div>
+          <h1 class="text-xl font-bold">Chat Room</h1>
+          <p class="text-sm text-gray-300">Welcome, <span id="displayUsername">User</span></p>
+        </div>
+      </div>
+      <div class="flex gap-2">
+        <button id="changeUsername" class="text-sm bg-gray-600 px-3 py-1 rounded hover:bg-gray-500 transition-colors">
+          Change Name
+        </button>
+        <button id="toggleTheme" class="text-sm bg-gray-600 px-3 py-1 rounded hover:bg-gray-500 transition-colors">
+          <i class="fas fa-moon"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Messages Container -->
+    <div id="messages" class="flex-1 overflow-y-auto p-4 space-y-3"></div>
+
+    <!-- Online Users -->
+    <div class="bg-gray-700 p-2 border-t border-gray-600">
+      <p class="text-sm text-gray-300"><span id="onlineCount">0</span> users online</p>
+    </div>
+
+    <!-- Input Area -->
+    <div class="p-4 bg-gray-700 border-t border-gray-600">
+      <form id="messageForm" class="flex">
+        <input id="messageInput" class="flex-1 p-3 rounded-l bg-gray-600 text-white border-gray-600 border focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Type a message..." />
+        <button type="submit" class="bg-blue-600 px-6 py-3 rounded-r hover:bg-blue-700 transition-colors flex items-center">
+          <i class="fas fa-paper-plane mr-2"></i> Send
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    // Theme toggle functionality
+    let darkMode = true;
+    const toggleTheme = document.getElementById('toggleTheme');
+    
+    toggleTheme.addEventListener('click', () => {
+      darkMode = !darkMode;
+      if (darkMode) {
+        document.body.classList.remove('bg-gray-100');
+        document.body.classList.add('bg-gray-900');
+        toggleTheme.innerHTML = '<i class="fas fa-moon"></i>';
+      } else {
+        document.body.classList.remove('bg-gray-900');
+        document.body.classList.add('bg-gray-100');
+        toggleTheme.innerHTML = '<i class="fas fa-sun"></i>';
+      }
+    });
+
+    // Username handling
+    const usernameModal = document.getElementById('usernameModal');
+    const usernameInput = document.getElementById('usernameInput');
+    const saveUsername = document.getElementById('saveUsername');
+    const changeUsername = document.getElementById('changeUsername');
+    const displayUsername = document.getElementById('displayUsername');
+    const userInitial = document.getElementById('userInitial');
+    
+    // Check if username is already saved
+    let username = localStorage.getItem('chatUsername');
+    
+    if (username) {
+      usernameModal.classList.add('hidden');
+      displayUsername.textContent = username;
+      userInitial.textContent = username.charAt(0).toUpperCase();
+    }
+    
+    saveUsername.addEventListener('click', () => {
+      if (usernameInput.value.trim() !== '') {
+        username = usernameInput.value.trim();
+        localStorage.setItem('chatUsername', username);
+        displayUsername.textContent = username;
+        userInitial.textContent = username.charAt(0).toUpperCase();
+        usernameModal.classList.add('hidden');
+        
+        // Announce user joined
+        if (socket.readyState === WebSocket.OPEN) {
+          const joinMessage = {
+            type: 'system',
+            content: `${username} has joined the chat`,
+            timestamp: new Date().toISOString()
+          };
+          socket.send(JSON.stringify(joinMessage));
+        }
+      }
+    });
+    
+    changeUsername.addEventListener('click', () => {
+      usernameModal.classList.remove('hidden');
+      usernameInput.value = username || '';
+      usernameInput.focus();
+    });
+    
+    // Handle Enter key in username modal
+    usernameInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        saveUsername.click();
+      }
+    });
+
+    // WebSocket connection
+    let socket;
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 5;
+    const reconnectDelay = 3000;
+    
+    function connectWebSocket() {
+      // Try to connect to the Python backend first, fallback to Node.js
+      socket = new WebSocket("ws://localhost:8000/ws");
+      
+      socket.onopen = function() {
+        console.log("WebSocket connection established");
+        reconnectAttempts = 0;
+        
+        // Announce user joined if username exists
+        if (username) {
+          const joinMessage = {
+            type: 'system',
+            content: `${username} has joined the chat`,
+            timestamp: new Date().toISOString()
+          };
+          socket.send(JSON.stringify(joinMessage));
+        }
+      };
+      
+      socket.onclose = function() {
+        console.log("WebSocket connection closed");
+        
+        // Try to reconnect if not max attempts
+        if (reconnectAttempts < maxReconnectAttempts) {
+          reconnectAttempts++;
+          console.log(`Attempting to reconnect (${reconnectAttempts}/${maxReconnectAttempts})...`);
+          setTimeout(connectWebSocket, reconnectDelay);
+        } else {
+          // Try Node.js backend as fallback
+          socket = new WebSocket("ws://localhost:8080");
+          
+          socket.onopen = function() {
+            console.log("Connected to Node.js WebSocket server");
+            reconnectAttempts = 0;
+          };
+          
+          socket.onclose = function() {
+            console.log("Failed to connect to any WebSocket server");
+            showErrorMessage("Could not connect to chat server. Please try again later.");
+          };
+          
+          setupSocketEvents(socket);
+        }
+      };
+      
+      setupSocketEvents(socket);
+    }
+    
+    function setupSocketEvents(socket) {
+      const messagesDiv = document.getElementById("messages");
+      
+      socket.onmessage = function(event) {
+        try {
+          // Try to parse as JSON first
+          const data = JSON.parse(event.data);
+          
+          if (data.type === 'system') {
+            // System message
+            appendSystemMessage(data.content, data.timestamp);
+          } else {
+            // User message
+            appendMessage(data.username, data.content, data.timestamp, data.username === username);
+          }
+        } catch (e) {
+          // Fallback for plain text messages
+          appendMessage('Anonymous', event.data, new Date().toISOString(), false);
+        }
+        
+        // Auto scroll to bottom
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      };
+      
+      socket.onerror = function(error) {
+        console.error("WebSocket error:", error);
+        showErrorMessage("Error connecting to chat server");
+      };
+    }
+    
+    function showErrorMessage(message) {
+      const messagesDiv = document.getElementById("messages");
+      const errorDiv = document.createElement("div");
+      errorDiv.className = "p-3 bg-red-900 text-white rounded-lg text-center";
+      errorDiv.textContent = message;
+      messagesDiv.appendChild(errorDiv);
+    }
+    
+    // Message handling
+    const messageForm = document.getElementById('messageForm');
+    const messageInput = document.getElementById('messageInput');
+    
+    messageForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      sendMessage();
+    });
+    
+    function sendMessage() {
+      const text = messageInput.value.trim();
+      if (text !== "" && username && socket.readyState === WebSocket.OPEN) {
+        const messageObj = {
+          username: username,
+          content: text,
+          timestamp: new Date().toISOString(),
+          type: 'message'
+        };
+        
+        socket.send(JSON.stringify(messageObj));
+        messageInput.value = "";
+      } else if (!username) {
+        usernameModal.classList.remove('hidden');
+      }
+    }
+    
+    function formatTime(timestamp) {
+      const date = new Date(timestamp);
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    
+    function appendMessage(sender, content, timestamp, isOwnMessage) {
+      const messagesDiv = document.getElementById("messages");
+      const messageDiv = document.createElement("div");
+      
+      messageDiv.className = isOwnMessage 
+        ? "flex flex-col items-end" 
+        : "flex flex-col items-start";
+      
+      const bubbleClass = isOwnMessage
+        ? "bg-blue-600 text-white rounded-lg rounded-tr-none p-3 max-w-[80%]"
+        : "bg-gray-700 text-white rounded-lg rounded-tl-none p-3 max-w-[80%]";
+      
+      messageDiv.innerHTML = `
+        <div class="mb-1 text-xs text-gray-400">${sender} • ${formatTime(timestamp)}</div>
+        <div class="${bubbleClass}">
+          ${content}
+        </div>
+      `;
+      
+      messagesDiv.appendChild(messageDiv);
+    }
+    
+    function appendSystemMessage(content, timestamp) {
+      const messagesDiv = document.getElementById("messages");
+      const messageDiv = document.createElement("div");
+      
+      messageDiv.className = "flex justify-center";
+      messageDiv.innerHTML = `
+        <div class="bg-gray-700 text-gray-300 rounded-full px-4 py-1 text-sm">
+          ${content} • ${formatTime(timestamp)}
+        </div>
+      `;
+      
+      messagesDiv.appendChild(messageDiv);
+    }
+    
+    // Initialize connection
+    connectWebSocket();
+    
+    // Update online count (mock for now)
+    const onlineCount = document.getElementById('onlineCount');
+    setInterval(() => {
+      // In a real app, this would come from the server
+      const randomUsers = Math.floor(Math.random() * 5) + 1;
+      onlineCount.textContent = randomUsers;
+    }, 10000);
+  </script>
+</body>
+</html>
